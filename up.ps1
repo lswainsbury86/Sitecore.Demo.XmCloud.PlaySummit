@@ -42,14 +42,14 @@ if (![string]::IsNullOrWhitespace($nodeVersion)) {
     Set-EnvFileVariable "NODEJS_VERSION" -Value $xmCloudBuild.renderingHosts.PlayWebsite.nodeVersion
 }
 
-# # DEMO TEAM CUSTOMIZATION - Ensure the right NodeJs version is installed
-# $currentNodeJsVersion = node -v
-# $currentNodeJsVersion = $currentNodeJsVersion.substring(1)
+# DEMO TEAM CUSTOMIZATION - Ensure the right NodeJs version is installed
+$currentNodeJsVersion = node -v
+$currentNodeJsVersion = $currentNodeJsVersion.substring(1)
 
-# if ($currentNodeJsVersion -ne $nodeVersion) {
-#     throw "ERROR: You are currently running NodeJs $currentNodeJsVersion and this project requires a different version. Please switch to NodeJs $nodeVersion. Then delete the /src/rendering/node_modules folder. Then run this script again."
-# }
-# # END CUSTOMIZATION
+if ($currentNodeJsVersion -ne $nodeVersion) {
+    throw "ERROR: You are currently running NodeJs $currentNodeJsVersion and this project requires a different version. Please switch to NodeJs $nodeVersion. Then delete the /src/rendering/node_modules folder. Then run this script again."
+}
+# END CUSTOMIZATION
 
 # Double check whether init has been run
 $envCheckVariable = "SITECORE_ADMIN_PASSWORD"
