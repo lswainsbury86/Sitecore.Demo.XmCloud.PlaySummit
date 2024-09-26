@@ -3,10 +3,8 @@ import { GetStaticPaths, GetStaticProps } from 'next';
 import NotFound from 'src/NotFound';
 import Layout from 'src/Layout';
 import {
-  RenderingType,
   SitecoreContext,
   ComponentPropsContext,
-  EditingComponentPlaceholder,
   StaticPath,
 } from '@sitecore-jss/sitecore-jss-nextjs';
 import { handleEditorFastRefresh } from '@sitecore-jss/sitecore-jss-nextjs/utils';
@@ -15,6 +13,11 @@ import { sitecorePagePropsFactory } from 'lib/page-props-factory';
 import { componentBuilder } from 'temp/componentBuilder';
 import { sitemapFetcher } from 'lib/sitemap-fetcher';
 import { initialize as initializeSend } from '../services/SendService'; // DEMO TEAM CUSTOMIZATION - Sitecore Send integration
+import { usePathname } from 'next/navigation';
+import { PageController, trackEntityPageViewEvent } from '@sitecore-search/react';
+import { fetchUserProfileData, isSearchSDKEnabled } from '../services/SearchSDKService';
+import { storeSearchProfileData } from '../services/CdpService';
+import { logSearchProfileData } from 'src/services/CloudSDKService';
 
 const SitecorePage = ({
   notFound,
@@ -33,14 +36,38 @@ const SitecorePage = ({
   }, [layoutData.sitecore.context.pageState]);
   // END CUSTOMIZATION
 
+  // DEMO TEAM CUSTOMIZATION - Search SDK integration
+  const pageUri = usePathname();
+  useEffect(() => {
+    (async () => {
+      if (isSearchSDKEnabled) {
+        PageController.getContext().setPageUri(pageUri);
+        await trackEntityPageViewEvent('content', {
+          items: [{ id: layoutData.sitecore.route.itemId }],
+        });
+
+        // Save corresponding pageUri to session storage as a workaround because Search API does not return custom attributes
+        sessionStorage.setItem(layoutData.sitecore.route.itemId, pageUri);
+
+        // Fetch the Sitecore Search user profile data
+        const userProfileData = await fetchUserProfileData();
+
+        // Store it as a guest data extension in legacy CDP
+        storeSearchProfileData(userProfileData);
+
+        // Log it as a custom event in corresponding Context ID CDP using the Cloud SDK
+        logSearchProfileData(userProfileData);
+      }
+    })();
+  }, [pageUri, layoutData.sitecore.route.itemId]);
+  // END CUSTOMIZATION
+
   if (notFound || !layoutData.sitecore.route) {
     // Shouldn't hit this (as long as 'notFound' is being returned below), but just to be safe
     return <NotFound />;
   }
 
   const isEditing = layoutData.sitecore.context.pageEditing;
-  const isComponentRendering =
-    layoutData.sitecore.context.renderingType === RenderingType.Component;
 
   return (
     <ComponentPropsContext value={componentProps}>
@@ -48,15 +75,7 @@ const SitecorePage = ({
         componentFactory={componentBuilder.getComponentFactory({ isEditing })}
         layoutData={layoutData}
       >
-        {/*
-          Sitecore Pages supports component rendering to avoid refreshing the entire page during component editing.
-          If you are using Experience Editor only, this logic can be removed, Layout can be left.
-        */}
-        {isComponentRendering ? (
-          <EditingComponentPlaceholder rendering={layoutData.sitecore.route} />
-        ) : (
-          <Layout layoutData={layoutData} headLinks={headLinks} />
-        )}
+        <Layout layoutData={layoutData} headLinks={headLinks} />
       </SitecoreContext>
     </ComponentPropsContext>
   );

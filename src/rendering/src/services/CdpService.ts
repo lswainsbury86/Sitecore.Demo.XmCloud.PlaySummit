@@ -1,3 +1,6 @@
+import { RouteData } from '@sitecore-jss/sitecore-jss-nextjs';
+import Cookies from 'js-cookie';
+
 import {
   BoxeverScripts,
   logViewEvent as boxeverLogViewEvent,
@@ -7,14 +10,12 @@ import {
   WelcomeMessage,
   getDynamicWelcomeMessage as boxeverGetDynamicWelcomeMessage,
   isCdpConfigured as boxeverIsCdpConfigured,
-  closeSession as boxeverCloseSession,
   getGuestEmail as boxeverGetGuestEmail,
   getGuestFirstName as boxeverGetGuestFirstName,
   getGuestLastName as boxeverGetGuestLastName,
   shouldCloseSession as boxeverShouldCloseSession,
   ShouldCloseSessionResponse,
 } from './BoxeverService';
-import { RouteData } from '@sitecore-jss/sitecore-jss-nextjs';
 import { TICKETS } from '../models/mock-tickets';
 import { SessionPageFields } from '../types/session';
 import { DLineItem } from '../models/ordercloud/DLineItem';
@@ -22,6 +23,7 @@ import { AddToCartPayload } from '../models/cdp/AddToCartPayload';
 import { OrderCheckoutPayload, OrderItem } from '../models/cdp/OrderCheckoutPayload';
 import { DOrder } from '../models/ordercloud/DOrder';
 import { DPayment } from '../models/ordercloud/DPayment';
+import { CDP_CUSTOM_EVENTS } from 'src/constants/cdp-custom-events';
 
 export const isCdpConfigured = boxeverIsCdpConfigured;
 
@@ -58,8 +60,11 @@ export function logViewEvent(route?: RouteData): Promise<unknown> {
   return boxeverLogViewEvent(additionalData);
 }
 
+/**
+ * Logs a custom audience preference event
+ */
 export function logAudiencePreferenceEvent(audience: string): Promise<unknown> {
-  return logEvent('AUDIENCE_PREFERENCE', { audience });
+  return logEvent(CDP_CUSTOM_EVENTS.audiencePreference.type, { audience });
 }
 
 /**
@@ -78,7 +83,7 @@ export function identifyVisitor(
 /**
  * Logs the purchase of a ticket as an event, and stores the owned ticket in the visitor CDP profile.
  */
-export function logTicketPurchase(ticketId: number): Promise<unknown> {
+export async function logTicketPurchase(ticketId: number, onSale: boolean): Promise<unknown> {
   const purchasedTicketItem = TICKETS[ticketId];
   // If the purchased ticket is an upgrade, store the target upgrade ticket in the data extension
   const ownedTicket =
@@ -90,31 +95,38 @@ export function logTicketPurchase(ticketId: number): Promise<unknown> {
   const eventPayload = {
     ticketId: ticketId,
     ticketName: purchasedTicketItem.name,
-    pricePaid: purchasedTicketItem.price,
+    pricePaid: onSale ? purchasedTicketItem.salePrice : purchasedTicketItem.price,
   };
+
   const dataExtensionPayload = {
     key: dataExtensionName,
     ticketId: parseInt(ownedTicket.id),
     ticketName: ownedTicket.name,
   };
 
-  return logEvent('TICKET_PURCHASED', eventPayload).then(() =>
-    saveDataExtension(dataExtensionName, dataExtensionPayload)
-  );
+  await logEvent(CDP_CUSTOM_EVENTS.paymentFormCompleted.type);
+  await logEvent(CDP_CUSTOM_EVENTS.paymentSuccessful.type);
+  await logEvent(CDP_CUSTOM_EVENTS.ticketPurchased.type, eventPayload);
+  return saveDataExtension(dataExtensionName, dataExtensionPayload);
 }
 
 /**
- * Logs a custom event when a user scans a QR code on the TV app
+ * Logs a custom event and stores the data in the visitor CDP profile.
  */
-export function logQRCodeEvent(
-  eventName: string,
-  payload?: Record<string, unknown>
-): Promise<unknown> {
-  return logEvent(eventName, payload);
+export async function logAttendeeFormCompleted(): Promise<unknown> {
+  const dataExtensionName = 'AttendeeFormCompleted';
+  const dataExtensionPayload = {
+    key: dataExtensionName,
+  };
+  await logEvent(CDP_CUSTOM_EVENTS.attendeeFormCompleted.type);
+  return saveDataExtension(dataExtensionName, dataExtensionPayload);
 }
 
-export function closeCurrentSession(): Promise<unknown> {
-  return boxeverCloseSession();
+/**
+ * Logs a custom event when a ticket is selected
+ */
+export function logTicketSelected(): Promise<unknown> {
+  return logEvent(CDP_CUSTOM_EVENTS.ticketSelected.type);
 }
 
 /**
@@ -198,3 +210,47 @@ export async function getGuestLastName(): Promise<string> {
 export function shouldCloseSession(): Promise<ShouldCloseSessionResponse> {
   return boxeverShouldCloseSession();
 }
+
+/**
+ * Stores the Search profile data for the current user in the visitor CDP profile.
+ */
+export const storeSearchProfileData = (payload: {
+  entities: [
+    {
+      affinity: { audience: [{ value: string; score: number }] };
+      events: { views: [{ id: string }] };
+    }
+  ];
+}): Promise<unknown> => {
+  const dataExtensionName = 'SearchProfileData';
+
+  // Transform the affinity scores & page views into suitable forms for the guest data extension
+  const affinities = payload?.entities?.[0].affinity?.audience?.reduce(
+    (obj, item) => (
+      (obj[
+        item.value
+          .split(' ')
+          .map((x, index) => (index === 0 ? x.toLowerCase() : x))
+          .join('')
+      ] = Math.round((item.score + Number.EPSILON) * 100) / 100),
+      obj
+    ),
+    {} as Record<string, number>
+  );
+
+  const pageViews = payload?.entities?.[0].events?.views
+    ?.slice(0, 5)
+    .reduce(
+      (obj, item, index) => ((obj[`page${index + 1}`] = sessionStorage.getItem(item.id)), obj),
+      {} as Record<string, string>
+    );
+
+  const dataExtensionPayload = {
+    key: dataExtensionName,
+    uuid: Cookies.get('__rutma').split('.')[0],
+    ...affinities,
+    ...pageViews,
+  };
+
+  return saveDataExtension(dataExtensionName, dataExtensionPayload);
+};
